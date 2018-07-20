@@ -1,0 +1,106 @@
+package com.scb.channels.research.resource;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.google.common.collect.ImmutableList;
+import com.scb.channels.foundation.api.dto.recon.ReconHeaderRequest;
+import com.scb.channels.foundation.api.dto.recon.ReconHeaderResponse;
+import com.scb.channels.foundation.api.dto.recon.ReconHeaders;
+import com.scb.channels.foundation.util.jackson.Marshaller;
+import com.scb.channels.research.api.UserReconResource;
+import com.scb.channels.research.model.User;
+import com.scb.channels.research.model.UserEntitlement;
+import com.scb.channels.research.user.service.UserMessageTypes;
+import com.scb.channels.research.user.service.UserService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
+import java.time.Instant;
+import java.util.*;
+import java.util.stream.Collectors;
+
+@Component
+public class UserReconResourceImpl implements UserReconResource {
+
+    @Autowired
+    private UserService userService;
+
+    @Autowired
+    private Marshaller marshaller;
+
+    @Override
+    public ReconHeaderResponse resolveReconHeadersForUser(String request) throws JsonProcessingException {
+        ReconHeaderRequest reconHeaderRequest = marshaller.unmarshalLenient(request, ReconHeaderRequest.class);
+        UserMessageTypes userMessageTypes = UserMessageTypes.fromValue(reconHeaderRequest.getFirstHeader().getEntityType());
+
+        if(userMessageTypes == UserMessageTypes.userinfo) {
+            return userProfileRecon(reconHeaderRequest);
+        }
+
+        if(userMessageTypes == UserMessageTypes.subscriptions) {
+            return userSubscriptionRecon(reconHeaderRequest);
+        }
+
+        if(userMessageTypes == UserMessageTypes.entitlements) {
+            return entitlementsRecon(reconHeaderRequest);
+        }
+
+        return new ReconHeaderResponse(ImmutableList.of(), ImmutableList.of());
+
+    }
+
+    private ReconHeaderResponse userProfileRecon(ReconHeaderRequest reconHeaderRequest) {
+        List<ReconHeaders> headersToAddOrUpdate = new ArrayList<>();
+        List<String> userIds = reconHeaderRequest.getReconHeaders().stream().flatMap(r -> r.getIdentifiers().stream()).collect(Collectors.toList());
+        Collection<User> users = userService.loadUsersById(userIds);
+        Map<String, User> userMap = users.stream().collect(Collectors.toMap(User::getUserId, user -> user));
+
+        reconHeaderRequest.getReconHeaders().stream().forEach(r -> {
+            String id = r.getIdentifiers().get(0);
+            User user = userMap.get(id);
+            if (user == null || user.getLastUpdatedTime() == null || Instant.ofEpochSecond(r.getTimestamp()).isAfter(user.getLastUpdatedTime())) {
+                headersToAddOrUpdate.add(r);
+            }
+        });
+
+        return new ReconHeaderResponse(headersToAddOrUpdate, ImmutableList.of());
+    }
+
+
+    private ReconHeaderResponse userSubscriptionRecon(ReconHeaderRequest reconHeaderRequest) {
+        List<ReconHeaders> headersToAddOrUpdate = new ArrayList<>();
+        List<String> userIds = reconHeaderRequest.getReconHeaders().stream().flatMap(r -> r.getIdentifiers().stream()).collect(Collectors.toList());
+        Collection<User> users = userService.loadUsersById(userIds);
+        Map<String, User> userMap = users.stream().collect(Collectors.toMap(User::getUserId, user -> user));
+
+        reconHeaderRequest.getReconHeaders().stream().forEach(r -> {
+            String id = r.getIdentifiers().get(0);
+            User user = userMap.get(id);
+            if (user == null || user.getSubscriptions() == null || user.getSubscriptions().getLastUpdatedTime() == null
+                    || Instant.ofEpochSecond(r.getTimestamp()).isAfter(user.getSubscriptions().getLastUpdatedTime())) {
+                headersToAddOrUpdate.add(r);
+            }
+        });
+
+        return new ReconHeaderResponse(headersToAddOrUpdate, ImmutableList.of());
+    }
+
+
+    private ReconHeaderResponse entitlementsRecon(ReconHeaderRequest reconHeaderRequest) {
+        List<ReconHeaders> headersToAddOrUpdate = new ArrayList<>();
+        List<String> userIds = reconHeaderRequest.getReconHeaders().stream().flatMap(r -> r.getIdentifiers().stream()).collect(Collectors.toList());
+        Collection<UserEntitlement> entitlements = userService.loadEntitlementById(userIds);
+        Map<String, UserEntitlement> entitlementMap = entitlements.stream().collect(Collectors.toMap(UserEntitlement::getUserId, entitlement -> entitlement));
+
+        reconHeaderRequest.getReconHeaders().stream().forEach(r -> {
+            String id = r.getIdentifiers().get(0);
+            UserEntitlement entitlement = entitlementMap.get(id);
+
+            if (entitlement == null || entitlement.getLastUpdatedTime() == null || Instant.ofEpochSecond(r.getTimestamp()).isAfter(entitlement.getLastUpdatedTime())) {
+                headersToAddOrUpdate.add(r);
+            }
+        });
+
+        return new ReconHeaderResponse(headersToAddOrUpdate, ImmutableList.of());
+    }
+
+}
