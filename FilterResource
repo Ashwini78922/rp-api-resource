@@ -1,0 +1,14 @@
+package com.scb.channels.research.resource;
+
+import com.scb.channels.research.model.analyst.Analyst;
+import com.scb.channels.research.model.researchreason.CompositeResearchReason;
+import com.scb.channels.research.model.tradeIdeas.CompositeTradeIdea;
+
+public interface FilterResource {
+
+   CompositeResearchReason getActiveResearchReasons(CompositeResearchReason resourceStatuses);
+   CompositeTradeIdea getActiveTradeIdeas(CompositeTradeIdea tradeIdeasFx);
+
+   boolean checkIfAnalystIsActive(Analyst analyst);
+
+}
