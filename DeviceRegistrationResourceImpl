@@ -1,0 +1,144 @@
+package com.scb.channels.research.resource;
+
+import com.scb.channels.foundation.util.jackson.Marshaller;
+import com.scb.channels.research.api.DeviceRegistrationResource;
+import com.scb.channels.research.model.DeviceRegistrationInfo;
+import com.scb.channels.research.model.TokenRequest;
+import com.scb.channels.research.model.User;
+import com.scb.channels.research.model.clientform.ClientSignUpForm;
+import com.scb.channels.research.model.clientform.ClientSignUpResponse;
+import com.scb.channels.research.service.PreConsentService;
+import com.scb.channels.research.user.outbound.model.CategoryType;
+import com.scb.channels.research.user.outbound.service.DeviceRegistrationMsgProvider;
+import com.scb.channels.research.user.service.UserService;
+import com.scb.channels.research.utils.ResourceUtils;
+import com.scb.channels.research.utils.RpApiConstants;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
+import javax.ws.rs.BadRequestException;
+import javax.ws.rs.NotFoundException;
+import javax.ws.rs.core.Response;
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+import static com.scb.channels.research.utils.ResourceUtils.badRequestIfTrue;
+
+@Component
+public class DeviceRegistrationResourceImpl implements DeviceRegistrationResource {
+
+    @Autowired
+    private Marshaller marshaller;
+
+    @Autowired
+    private DeviceRegistrationMsgProvider userMessageService;
+
+    @Autowired
+    private UserService userService;
+
+    @Autowired
+    private PreConsentService preConsentService;
+
+    private static final Logger LOG = LoggerFactory.getLogger(DeviceRegistrationResourceImpl.class);
+
+    @Override
+    public Response activation(String body) {
+        LOG.info("Processing first time login request {}", body);
+        try {
+            DeviceRegistrationInfo deviceRegistrationInfo = marshaller.unmarshalLenient(body, DeviceRegistrationInfo.class);
+            User user = userService.loadUserByEmail(deviceRegistrationInfo.getEmail());
+            ResourceUtils.notFoundIfNull(user, String.format("User not found for emailId [%s]", deviceRegistrationInfo.getEmail()));
+            Map<String, Object> value = new LinkedHashMap<>();
+            value.put(RpApiConstants.DEVICE_IDENTIFIER, deviceRegistrationInfo.getDeviceIdentifier());
+            value.put(RpApiConstants.DEVICE_TOKEN, deviceRegistrationInfo.getDeviceToken());
+            value.put(RpApiConstants.SUCCESS, deviceRegistrationInfo.isSuccess());
+            value.put(RpApiConstants.COLUMN_USER_ID, user.getUserId());
+            userMessageService.notifyFirstTimeLogin(value);
+            LOG.info("Finished Processing first time login request");
+        } catch (NotFoundException e) {
+            LOG.error("Error Processing first time login request", e);
+            throw e;
+        } catch (Exception e) {
+            LOG.error("Error Processing first time login request", e);
+            throw new RuntimeException("Internal Server Error");
+        }
+        return Response.status(Response.Status.OK).build();
+    }
+
+    @Override
+    public Response userRequest(String body) {
+        LOG.info("Processing passwordReset/DeviceActivation request {}", body);
+        try {
+            DeviceRegistrationInfo deviceRegistrationInfo = marshaller.unmarshalLenient(body, DeviceRegistrationInfo.class);
+            if (deviceRegistrationInfo.isRegisteredUser()) {
+                User user = userService.loadUserByEmail(deviceRegistrationInfo.getEmail());
+                ResourceUtils.notFoundIfNull(user, String.format("User not found for emailId [%s]", deviceRegistrationInfo.getEmail()));
+                if (CategoryType.DeviceRegistrationRequest.name().equalsIgnoreCase(deviceRegistrationInfo.getCategory())) {
+                    userMessageService.sendDeviceRegToken(user.getUserId(), deviceRegistrationInfo.getEmail(), deviceRegistrationInfo.getOriginalUrl(), deviceRegistrationInfo.getLanguageCode());
+                } else {
+                    userMessageService.sendPasswordResetToken(user.getUserId(), deviceRegistrationInfo.getEmail(), deviceRegistrationInfo.getOriginalUrl(), deviceRegistrationInfo.getLanguageCode());
+                }
+            } else {
+                Map<String, Object> value = new LinkedHashMap<>();
+                value.put(RpApiConstants.EMAIL.toLowerCase(), deviceRegistrationInfo.getEmail());
+                value.put(RpApiConstants.DEVICE_IDENTIFIER, deviceRegistrationInfo.getDeviceIdentifier());
+                value.put(RpApiConstants.IS_REGISTERED_USER, deviceRegistrationInfo.isRegisteredUser());
+                value.put(RpApiConstants.SUCCESS, deviceRegistrationInfo.isSuccess());
+                value.put(RpApiConstants.ORIGINAL_URL, deviceRegistrationInfo.getOriginalUrl());
+                value.put(RpApiConstants.LANGUAGE_CODE, deviceRegistrationInfo.getLanguageCode());
+                if (CategoryType.DeviceRegistrationRequest.name().equalsIgnoreCase(deviceRegistrationInfo.getCategory())) {
+                    userMessageService.notifyDeviceRegInfo(value);
+                } else {
+                    userMessageService.notifyPasswordResetInfo(value);
+                }
+            }
+        } catch (NotFoundException e) {
+            LOG.error("Error Processing passwordReset/DeviceActivation request", e);
+            throw e;
+        } catch (Exception e) {
+            LOG.error("Error Processing passwordReset/DeviceActivation request", e);
+            throw new RuntimeException("Internal Server Error");
+        }
+        LOG.info("Finished Processing passwordReset/DeviceActivation request");
+        return Response.status(Response.Status.OK).build();
+    }
+
+    @Override
+    public String registrationToken(String body) {
+        LOG.info("Processing Token request {}", body);
+        TokenRequest tokenRequest = marshaller.unmarshalLenient(body, TokenRequest.class);
+        User user = userService.loadUserById(tokenRequest.getUserId());
+        ResourceUtils.notFoundIfNull(user, String.format("User not found for Id [%s]", tokenRequest.getUserId()));
+        return userMessageService.getToken(user.getUserId(), user.getEmail(), tokenRequest.getExpiryTime());
+    }
+
+    @Override
+    public String initPreconsent() {
+        return marshaller.marshalLenient(preConsentService.generateVisualCaptcha());
+    }
+
+    @Override
+    public String clientSignUpRequest(String body) {
+        try {
+            LOG.info("Processing client SignUp form request {}", body);
+            ClientSignUpForm clientSignUpForm = marshaller.unmarshalLenient(body, ClientSignUpForm.class);
+            badRequestIfTrue(!preConsentService.isValid(clientSignUpForm), "rmName and rmEmail both can not be null");
+            ClientSignUpResponse clientSignUpResponse = preConsentService.validateAnswer(clientSignUpForm);
+            if (clientSignUpResponse.isTransactionSuccess()) {
+                clientSignUpForm.nullify();
+                userMessageService.notifyClientPreConsent(clientSignUpForm);
+                preConsentService.persistCaptcha(clientSignUpForm.getCaptchaAnswer());
+            }
+            LOG.info("Finished Processing Client SignUp form request");
+            return marshaller.marshalLenient(clientSignUpResponse);
+        } catch (BadRequestException e) {
+            LOG.error("Error Processing Client SignUp form request", e);
+            throw e;
+        } catch (Exception e) {
+            LOG.error("Error Processing Client SignUp form request", e);
+            throw new RuntimeException("Internal Server Error");
+        }
+    }
+}
