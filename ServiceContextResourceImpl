@@ -1,0 +1,57 @@
+package com.scb.channels.research.resource;
+
+import com.jayway.jsonpath.JsonPath;
+import com.scb.channels.foundation.util.jackson.Marshaller;
+import com.scb.channels.research.api.ServiceContextResource;
+import com.scb.channels.research.model.ServiceContext;
+import com.scb.channels.research.model.ServiceContextResponse;
+import com.scb.channels.research.model.User;
+import com.scb.channels.research.user.service.UserService;
+import com.scb.channels.research.utils.ResourceUtils;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
+@Component
+public class ServiceContextResourceImpl implements ServiceContextResource {
+
+    public static final String USERID_PATH = "$.serviceContext.userId";
+    public static final String GROUPID_PATH = "$.serviceContext.groupId";
+
+    private Marshaller marshaller;
+
+    private UserService userService;
+
+    @Autowired
+    public ServiceContextResourceImpl(Marshaller marshaller, UserService userService) {
+        this.marshaller = marshaller;
+        this.userService = userService;
+    }
+
+    @Override
+    public String getServiceContext(String email, String body) {
+        String emailValue = JsonPath.parse(body).read(USERID_PATH);
+        User user = ResourceUtils.notFoundIfNull(userService.loadUserByEmail(emailValue), String.format("User not found for [%s].", emailValue));
+        return marshaller.marshalLenient(buildServiceContextResponse(user, JsonPath.parse(body).read(GROUPID_PATH)));
+    }
+
+    private ServiceContextResponse buildServiceContextResponse(User user, String groupId) {
+
+        ServiceContext serviceContext = ServiceContext.builder()
+                .plexId("")
+                .appAccessType("")
+                .userId(user.getUserId())
+                .groupId(groupId)
+                .uiVersion("")
+                .language("")
+                .idleTimeout(0)
+                .absoluteTimeout(0)
+                .profileId("")
+                .build();
+
+        return ServiceContextResponse.builder()
+                .transactionSuccess(true)
+                .serviceContext(serviceContext)
+                .build();
+    }
+
+}
