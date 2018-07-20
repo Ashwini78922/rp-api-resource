@@ -1,0 +1,30 @@
+package com.scb.channels.research.resource;
+
+
+import com.scb.channels.foundation.util.jackson.Marshaller;
+import com.scb.channels.research.api.NotificationResource;
+import com.scb.channels.research.resource.model.NotificationInfo;
+import com.scb.channels.research.service.NotificationService;
+import com.scb.channels.research.utils.ResourceUtils;
+import org.springframework.beans.factory.annotation.Autowired;
+
+public class NotificationResourceImpl implements NotificationResource {
+
+    @Autowired
+    private Marshaller marshaller;
+
+    @Autowired
+    private NotificationService notificationService;
+
+    @Override
+    public String getNotificationInfo(String userId, String reportId) {
+        return marshaller.marshalLenient(ResourceUtils.notFoundIfNull(notificationService.getNotificationInfo(reportId), String.format("Resource not found for reportId [%s]", reportId)));
+    }
+
+    @Override
+    public String updateNotificationInfo(String userId, String body) {
+        NotificationInfo notificationInfo = marshaller.unmarshalLenient(body, NotificationInfo.class);
+        notificationService.updateNotificationInfo(notificationInfo);
+        return marshaller.marshalLenient(notificationInfo);
+    }
+}
