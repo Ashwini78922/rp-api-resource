@@ -1,0 +1,27 @@
+package com.scb.channels.research.resource;
+
+import com.scb.channels.foundation.util.jackson.Marshaller;
+import com.scb.channels.research.api.HealthCheckResource;
+import com.scb.channels.research.service.HealthCheckService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
+@Component
+public class HealthCheckResourceImpl implements HealthCheckResource {
+    private static final Logger LOG = LoggerFactory.getLogger(HealthCheckResourceImpl.class);
+
+    @Autowired
+    private Marshaller marshaller;
+
+    @Autowired
+    private HealthCheckService healthCheckService;
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public String getCassandraConnectionStatus() {
+        return marshaller.marshalLenient(healthCheckService.getCassandraConnectionStatus());
+    }
+
+}
