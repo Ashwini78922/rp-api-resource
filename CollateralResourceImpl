@@ -1,0 +1,127 @@
+package com.scb.channels.research.resource;
+
+import com.scb.channels.foundation.util.jackson.Marshaller;
+import com.scb.channels.research.api.CollateralResource;
+import com.scb.channels.research.model.ResourceIdentifier;
+import com.scb.channels.research.model.researchreason.CompositeResearchReason;
+import com.scb.channels.research.service.ContentService;
+import com.scb.channels.research.utils.ResourceUtils;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
+import javax.ws.rs.core.HttpHeaders;
+import javax.ws.rs.core.Response;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.text.SimpleDateFormat;
+import java.util.Arrays;
+import java.util.Date;
+
+import static com.scb.channels.research.utils.RpApiConstants.*;
+
+@Component
+public class CollateralResourceImpl implements CollateralResource {
+
+    @Autowired
+    private ContentService contentService;
+
+    @Autowired
+    private Marshaller marshaller;
+
+    private static final String APPLICATION_ID = "rp";
+
+    @Override
+    public String getResearchReasons(String userId) {
+        CompositeResearchReason compositeResearchReason = contentService.researchReasons(userId);
+        ResourceUtils.notFoundIfNull(compositeResearchReason, String.format("ResearchReasons not found for user [%s]", userId));
+        return marshaller.marshalLenient(compositeResearchReason);
+    }
+
+    @Override
+    public String getPublicationTypes(String userId) {
+        return marshaller.marshalLenient(ResourceUtils.notFoundIfNull(contentService.publicationTypes(userId),
+                String.format("PublicationType not found for user [%s]", userId)));
+    }
+
+    @Override
+    public String getAnalyst(String userId, String analystId) {
+        ResourceUtils.badRequestIfNull(analystId, "Missing analyst id");
+        ResourceIdentifier identifier = ResourceIdentifier.builder()
+                .applicationId(APPLICATION_ID)
+                .category(ANALYSTS)
+                .documentId(analystId)
+                .build();
+        return marshaller.marshalLenient(ResourceUtils.notFoundIfNull(contentService.analyst(userId, identifier),
+                String.format("No active analyst found for id [%s]", analystId)));
+    }
+
+    @Override
+    public String getTradeIdeas(String userId, String assetClass) {
+        ResourceIdentifier identifier = ResourceIdentifier.builder()
+                .applicationId(APPLICATION_ID)
+                .category(TRADEIDEAS_CATEGORY)
+                .subCategory(assetClass)
+                .build();
+        return marshaller.marshalLenient(ResourceUtils.notFoundIfNull(contentService.tradeIdea(userId, identifier),
+                String.format("No active TradeIdeas found for assestClass [%s]", assetClass)));
+    }
+
+
+    @Override
+    public String getForecasts(String userId, String assetClass) {
+        ResourceIdentifier identifier = ResourceIdentifier.builder()
+                .applicationId(APPLICATION_ID)
+                .category(FORECAST_CATEGORY)
+                .subCategory(assetClass)
+                .build();
+        return marshaller.marshalLenient(ResourceUtils.notFoundIfNull(contentService.forecast(userId, identifier),
+                String.format("No active Forecast found for assestClass [%s]", assetClass)));
+    }
+
+    @Override
+    public String getRegionsAndCountries(String userId) {
+        return marshaller.marshalLenient(ResourceUtils.notFoundIfNull(contentService.regionsAndCountries(userId),
+                "No region and countries found for region and countries"));
+    }
+
+    @Override
+    public String getAnalystByCountryId(String userId, String countryId) {
+        validateRequest(countryId);
+        return ResourceUtils.notFoundIfNull(contentService.getAnalystGivenCountryId(userId, countryId), "No analyst found for " + countryId);
+    }
+
+    @Override
+    public String getAnalystByAssetClass(String userId, String assetClass) {
+        validateRequest(assetClass);
+        return ResourceUtils.notFoundIfNull(contentService.getAnalystGivenAssetClass(userId, assetClass), "No analyst found for " + assetClass);
+    }
+
+    @Override
+    public String getAssetClassSubscriptions(String userId) {
+        return contentService.getSubscriptionMenus(userId);
+    }
+
+    @Override
+    public Response renderReportPDF(String userId, String resourceId) {
+        validateRequest(userId, resourceId);
+        ByteArrayOutputStream outputStream = contentService.getReport(userId, resourceId);
+        ResourceUtils.notFoundIfNull(outputStream, String.format("Resource not found for [%s]", resourceId));
+
+        return Response
+                .ok(new ByteArrayInputStream(outputStream.toByteArray()))
+                .header(HttpHeaders.CONTENT_DISPOSITION, ResourceUtils.toBrowserHandledContentDispositionOrNull(ResourceUtils.getFileName(resourceId) + " " + new SimpleDateFormat("dd-MM-YYYY HH:mm:ss").format(new Date()) + ".pdf"))
+                .build();
+    }
+
+    @Override
+    public String getConfSessions(String userId) {
+        return marshaller.marshalLenient(contentService.getConfSession(userId));
+    }
+
+
+    private void validateRequest(String... data) {
+        Arrays.asList(data).stream().forEach(d ->
+                ResourceUtils.badRequestIfNull(d, String.format("Missing request params [%s]", d)));
+    }
+
+}
