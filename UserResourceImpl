@@ -1,0 +1,200 @@
+package com.scb.channels.research.resource;
+
+import com.scb.channels.foundation.util.jackson.Marshaller;
+import com.scb.channels.research.api.UserResource;
+import com.scb.channels.research.model.*;
+import com.scb.channels.research.model.user.UserProfile;
+import com.scb.channels.research.service.ContentService;
+import com.scb.channels.research.service.user.UserProfileService;
+import com.scb.channels.research.utils.ResourceUtils;
+import org.apache.commons.lang3.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
+import javax.ws.rs.BadRequestException;
+import java.util.Arrays;
+import java.util.List;
+import java.util.stream.Collectors;
+
+import static com.scb.channels.research.utils.ResourceUtils.*;
+
+@Component
+public class UserResourceImpl implements UserResource {
+
+    private static final Logger LOG = LoggerFactory.getLogger(UserResourceImpl.class);
+
+    @Autowired
+    private Marshaller marshaller;
+
+    @Autowired
+    private UserProfileService userProfileService;
+
+    @Autowired
+    private ContentService contentService;
+
+    @Override
+    public String getUserDetails(String userId) {
+        badRequestIfNull(userId, "Missing user id in header");
+        UserProfile user = notFoundIfNull(userProfileService.getActiveUserProfileById(userId), String.format("User not found for [%s].", userId));
+        return marshal(user);
+    }
+
+    @Override
+    public String getUserEntitlements(String userId) {
+        validateRequest(userId);
+        UserEntitlement userEntitlement = userProfileService.getUserEntitlement(userId);
+        notFoundIfNull(userEntitlement, String.format("Entitlements not found [%s]", userId));
+        return marshal(userEntitlement);
+    }
+
+
+    @Override
+    public String updateUserProfile(String userId, String body) {
+        validateRequest(userId, body);
+        UserProfile profileToUpdate;
+        try {
+            profileToUpdate = marshaller.unmarshalStrict(body, UserProfile.class);
+        } catch (Exception e) {
+            throw new BadRequestException("Error in unmarshalling user payload " + userId);
+        }
+
+        User actualUser = userProfileService.getActiveUserById(userId);
+        notFoundIfNull(actualUser, String.format("User not found [%s]", userId));
+
+        if (!validUserPayload(profileToUpdate))
+            throw new BadRequestException(profileToUpdate.getUserId() + " Invalid user profile payload");
+        if (!userId.equals(profileToUpdate.getUserId())) {
+            LOG.info("User id in header not in sync with request body {} - {}", profileToUpdate.getUserId(), userId);
+            forbidden(profileToUpdate.getUserId());
+        }
+
+
+        UserEntitlement actualUserEntitlement = userProfileService.getUserEntitlement(actualUser.getUserId());
+        if (!validateSubscription(actualUserEntitlement.getEntitlementIncludes(), profileToUpdate.getSubscriptions())) {
+            throw new BadRequestException(userId + " Invalid subscription details");
+        }
+        UserProfile userProfile = userProfileService.updateUserProfile(actualUser, profileToUpdate);
+        userProfileService.sendUpdates(userProfile, actualUser);
+        return marshal(userProfile);
+    }
+
+
+    @Override
+    public String getUserIDByEmail(String userLogin) {
+        badRequestIfNull(userLogin, "Missing user login in header");
+        UserProfile profile = userProfileService.getActiveUserByEmail(userLogin);
+        badRequestIfNull(profile, "User " + userLogin + " does not exist.");
+        return marshal(userProfileService.getActiveUserByEmail(userLogin).getUserId());
+    }
+
+    private String marshal(Object object) {
+        return marshaller.marshalStrict(object);
+    }
+
+
+    /***
+     * User profile validation
+     *
+     * @return
+     */
+    private boolean validUserPayload(UserProfile profileToUpdate) {
+        return  (!StringUtils.isBlank(profileToUpdate.getLanguageCode()))
+                && (!isNull(profileToUpdate.getAlertSettings())
+                && !isNull(profileToUpdate.getAlertSettings().getFrequencyCode())
+                && validateAlertSettings(profileToUpdate.getAlertSettings()));
+
+    }
+
+    private boolean validateAlertSettings(AlertSettings alertSettingsToUpdate) {
+        return  ((alertSettingsToUpdate.getFrequencyCode() == FrequencyCode.IMM)
+                || (((alertSettingsToUpdate.getFrequencyCode() == FrequencyCode.DLY)
+                && (alertSettingsToUpdate.getSendNotificationsToCodes().stream().collect(Collectors.toList()).stream().allMatch(SendNotificationsToCodes.EML::equals)))
+                && StringUtils.isNoneBlank(alertSettingsToUpdate.getDailyNotificationHour())
+                && ResourceUtils.valid24HoursTime(alertSettingsToUpdate.getDailyNotificationHour())
+                && !StringUtils.isBlank(alertSettingsToUpdate.getTimeZone())));
+    }
+
+    private void validateRequest(String... data) {
+        Arrays.asList(data).stream().forEach(d ->
+                badRequestIfNull(d, "Missing request params"));
+    }
+
+
+    private boolean validateSubscription(List<String> entitlementInclude, UserSubscription subscriptionToUpdate) {
+        if (subscriptionToUpdate == null) return true;
+        if (!validateAssetClassSelection(entitlementInclude, subscriptionToUpdate.getAssetClasses()))
+            return false;
+        if (!validLanguageSelection(subscriptionToUpdate.getLanguages())) return false;
+        if (!validatePublicationTypeSelection(subscriptionToUpdate.getPublications())) return false;
+        if (!validateInvestmentThemes(subscriptionToUpdate.getInvestmentThemes())) return false;
+        if (!validAnalystSelection(subscriptionToUpdate.getAnalysts())) return false;
+        if (!validRegionsCountries(subscriptionToUpdate.getRegionsCountries())) return false;
+        return true;
+    }
+
+    private boolean validateAssetClassSelection(List<String> entitlementIncludes, List<AssetClasses> toUpdate) {
+        if (toUpdate == null) return true;
+        if (!toUpdate.stream().map(AssetClasses::getCode).collect(Collectors.toList()).stream().allMatch(entitlementIncludes::contains)) {
+            LOG.info("AssetClass code does not match with EntitlementIncludes");
+            return false;
+        }
+        for (AssetClasses a : toUpdate) {
+            if (a.isAll() && (a.getReferenceIds().size() > 0 || a.getGroupReferenceIds().size() > 0)) return false;
+            if (a.isAll()) return true;
+            if (a.getGroupReferenceIds().stream().filter(g -> StringUtils.isBlank(g) || !ResourceUtils.isValidString(g)).count() != 0)
+                return false;
+            if (a.getReferenceIds().stream().filter(r -> StringUtils.isBlank(r) || !ResourceUtils.isValidString(r)).count() != 0)
+                return false;
+        }
+        return true;
+    }
+
+    private boolean validateInvestmentThemes(InvestmentThemes toUpdate) {
+        if (toUpdate == null) return true;
+        if (toUpdate.isAll() && toUpdate.getCodes().size() > 0) return false;
+        if (toUpdate.isAll()) return true;
+        if (toUpdate.getCodes().stream().filter(c -> StringUtils.isBlank(c) || !ResourceUtils.isValidString(c)).count() != 0)
+            return false;
+        return true;
+    }
+
+    private boolean validatePublicationTypeSelection(Publications toUpdate) {
+        if (toUpdate == null) return true;
+        if (toUpdate.isAll() && toUpdate.getTags().size() > 0) return false;
+        if (toUpdate.isAll()) return true;
+        if (toUpdate.getTags().stream().filter(c -> StringUtils.isBlank(c) || !ResourceUtils.isValidString(c)).count() != 0)
+            return false;
+        return true;
+    }
+
+    private boolean validLanguageSelection(Languages toUpdate) {
+        if (toUpdate == null) return false;
+        if (toUpdate.isAll() && toUpdate.getCodes().size() > 0) return false;
+        if (!toUpdate.isAll() && toUpdate.getCodes().size() <= 0) return false;
+        if (toUpdate.isAll()) return true;
+        if (toUpdate.getCodes().stream().filter(c -> StringUtils.isBlank(c) || !ResourceUtils.isValidString(c)).count() != 0)
+            return false;
+        return true;
+    }
+
+    private boolean validAnalystSelection(Analysts toUpdate) {
+        if (toUpdate == null) return true;
+        if (toUpdate.isAll() && toUpdate.getIds().size() > 0) return false;
+        if (toUpdate.isAll()) return true;
+        if (toUpdate.getIds().stream().filter(c -> StringUtils.isBlank(c) || !ResourceUtils.isValidString(c)).count() != 0)
+            return false;
+        return true;
+    }
+
+    private boolean validRegionsCountries(RegionsCountries toUpdate) {
+        if (toUpdate == null) return true;
+        if (toUpdate.isAll()) return true;
+        if (toUpdate.getCountryIds().stream().filter(c -> StringUtils.isBlank(c) || !ResourceUtils.isValidString(c)).count() != 0)
+            return false;
+        if (toUpdate.getRegionIds().stream().filter(c -> StringUtils.isBlank(c) || !ResourceUtils.isValidString(c)).count() != 0)
+            return false;
+        return true;
+    }
+}
