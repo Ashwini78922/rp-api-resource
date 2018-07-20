@@ -1,0 +1,50 @@
+package com.scb.channels.research.resource;
+
+
+import com.scb.channels.research.model.analyst.Analyst;
+import com.scb.channels.research.model.researchreason.CompositeResearchReason;
+import com.scb.channels.research.model.researchreason.ResearchReason;
+import com.scb.channels.research.model.tradeIdeas.CompositeTradeIdea;
+import com.scb.channels.research.model.tradeIdeas.TradeIdea;
+import org.springframework.stereotype.Component;
+
+import java.util.List;
+import java.util.stream.Collectors;
+
+@Component
+public class FilterResourceImpl implements FilterResource{
+
+    @Override
+    public CompositeResearchReason getActiveResearchReasons(CompositeResearchReason value) {
+        List<ResearchReason> researchReasons =
+                value.getValue().stream().filter(resourceStatus -> resourceStatus.isActive())
+                        .map(resourceStatus -> ResearchReason.builder()
+                                .code(resourceStatus.getCode())
+                                .imgList(resourceStatus.getImgList())
+                                .name(resourceStatus.getName())
+                                .active(resourceStatus.isActive())
+                                .build()).collect(Collectors.toList());
+        return CompositeResearchReason.builder().value(researchReasons).build();
+    }
+
+    @Override
+    public CompositeTradeIdea getActiveTradeIdeas(CompositeTradeIdea compositeTradeIdeasFx) {
+        List<TradeIdea> tradeIdeasFxes = compositeTradeIdeasFx.getValue().stream()
+                .filter(t -> t.isOpen()).map(t -> TradeIdea.builder()
+                        .action(t.getAction())
+                        .description(t.getDescription())
+                        .entryDate(t.getEntryDate())
+                        .open(t.isOpen())
+                        .reportId(t.getReportId())
+                        .entryLevel(t.getEntryLevel())
+                        .build()).collect(Collectors.toList());
+        return CompositeTradeIdea.builder().value(tradeIdeasFxes).build();
+    }
+
+    @Override
+    public boolean checkIfAnalystIsActive(Analyst analyst) {
+        return analyst.isActive();
+    }
+
+
+}
